@@ -11,7 +11,7 @@ pub fn build(b: *std.Build) void {
     });
 
     const exe = b.addExecutable(.{
-        .name = "computer_enhance",
+        .name = "z8086",
         .root_module = exe_mod,
     });
     b.installArtifact(exe);

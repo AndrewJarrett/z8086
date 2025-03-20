@@ -1,46 +1,70 @@
-//! By convention, main.zig is where your main function lives in the case that
-//! you are building an executable. If you are making a library, the convention
-//! is to delete this file and start with root.zig instead.
+const std = @import("std");
+const ArgIterator = std.process.ArgIterator;
+
+const Args = enum {
+    d,
+    disassemble,
+    a,
+    assemble,
+    h,
+    help,
+};
 
 pub fn main() !void {
-    // Prints to stderr (it's a shortcut based on `std.io.getStdErr()`)
-    std.debug.print("All your {s} are belong to us.\n", .{"codebase"});
+    // Get buffered writer
+    const stdout = std.io.getStdOut();
+    var bw = std.io.bufferedWriter(stdout.writer());
+    var writer = bw.writer();
 
-    // stdout is for the actual output of your application, for example if you
-    // are implementing gzip, then only the compressed bytes should be sent to
-    // stdout, not any debugging messages.
-    const stdout_file = std.io.getStdOut().writer();
-    var bw = std.io.bufferedWriter(stdout_file);
-    const stdout = bw.writer();
+    const helpText =
+        \\Usage: z8086 [(-d|--disassemble) [input]] [(-a|--assemble) [input]] [-h|--help]
+        \\Please specify one of the following commands:
+        \\  -d [input], --disassemble [input]       Disassembles the given binary file into 8086 assembly code
+        \\  -a [input], --assemble [input]          Assembles a given 8086 assembler file into a binary file according to the 8086 specification
+        \\  -h, --help                              This help text
+        \\
+    ;
 
-    try stdout.print("Run `zig build test` to run the tests.\n", .{});
+    const allocator = std.heap.page_allocator;
+    var iter = try std.process.argsWithAllocator(allocator);
+    defer iter.deinit();
 
-    try bw.flush(); // Don't forget to flush!
-}
+    // The first argument for POSIX is the command name, skip it
+    switch (@TypeOf(iter.inner)) {
+        std.process.ArgIteratorPosix => _ = iter.next(),
+        else => {},
+    }
 
-test "simple test" {
-    var list = std.ArrayList(i32).init(std.testing.allocator);
-    defer list.deinit(); // Try commenting this out and see if zig detects the memory leak!
-    try list.append(42);
-    try std.testing.expectEqual(@as(i32, 42), list.pop());
-}
+    // Parse arguments
+    var isError = true;
+    while (iter.next()) |arg| {
+        var output: [1024]u8 = undefined;
+        const size = std.mem.replace(u8, arg, "-", "", output[0..]);
+        const argNoHyphens = output[0 .. arg.len - size];
 
-test "use other module" {
-    try std.testing.expectEqual(@as(i32, 150), lib.add(100, 50));
-}
-
-test "fuzz example" {
-    const Context = struct {
-        fn testOne(context: @This(), input: []const u8) anyerror!void {
-            _ = context;
-            // Try passing `--fuzz` to `zig build test` and see if it manages to fail this test case!
-            try std.testing.expect(!std.mem.eql(u8, "canyoufindme", input));
+        switch (std.meta.stringToEnum(Args, argNoHyphens) orelse break) {
+            .d, .disassemble => {
+                try writer.print("Disassemble what?\n", .{});
+                isError = false;
+            },
+            .a, .assemble => {
+                try writer.print("Assemble what?\n", .{});
+                isError = false;
+            },
+            else => break,
         }
-    };
-    try std.testing.fuzz(Context{}, Context.testOne, .{});
+    }
+
+    // Display help text if there was any error or no arguments provided
+    if (isError) try writer.print(helpText, .{});
+
+    try bw.flush();
 }
 
-const std = @import("std");
+test "listing_0037_single_register_mov" {
+    const bin = @embedFile("listing/listing_0037_single_register_mov");
+    const expected = @embedFile("listing/listing_0037_single_register_mov-expected.asm");
 
-/// This imports the separate module containing `root.zig`. Take a look in `build.zig` for details.
-const lib = @import("computer_enhance_lib");
+    const src = bin; // Disassemble the binary
+    try std.testing.expectEqualStrings(src, expected);
+}
