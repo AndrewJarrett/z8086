@@ -48,15 +48,14 @@ pub fn main() !void {
         switch (std.meta.stringToEnum(Args, argNoHyphens) orelse Args.unknown) {
             .d, .disassemble => {
                 if (iter.next()) |input| {
-                    try writer.print("Disassembling {s}...\n\n", .{input});
-                    try bw.flush();
+                    std.log.debug("Disassembling {s}...", .{input});
 
                     var dasm = Disassembler.init(allocator);
                     defer dasm.deinit();
 
                     const src = try dasm.disassemble(input);
                     if (src) |s| {
-                        try writer.print("{s}\n", .{s});
+                        try writer.print("{s}", .{s});
                         isError = false;
                     } else {
                         isError = true;

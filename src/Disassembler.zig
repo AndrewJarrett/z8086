@@ -74,7 +74,7 @@ fn parse(self: *Self, filename: []const u8, file: File) ![]u8 {
 
     var bits: u16 = undefined;
     var opcode = try reader.readBits(u6, 6, &bits);
-    std.log.debug("opcode: {b}, bits: {d}\n", .{ opcode, bits });
+    std.log.debug("opcode: {b}, bits: {d}", .{ opcode, bits });
 
     while (bits > 0) : (opcode = try reader.readBits(u6, 6, &bits)) {
         switch (opcode) {
@@ -85,7 +85,7 @@ fn parse(self: *Self, filename: []const u8, file: File) ![]u8 {
                 const mod = try reader.readBits(u2, 2, &bits);
                 const reg = try reader.readBits(u3, 3, &bits);
                 const rm = try reader.readBits(u3, 3, &bits);
-                std.log.debug("opcode (mov): {b}, d: {b}, w: {b}, mod: {b}, reg: {b}, rm: {b}\n", .{
+                std.log.debug("opcode (mov): {b}, d: {b}, w: {b}, mod: {b}, reg: {b}, rm: {b}", .{
                     opcode,
                     d,
                     w,
@@ -99,7 +99,7 @@ fn parse(self: *Self, filename: []const u8, file: File) ![]u8 {
                         // Register to register mov
                         const destReg = if (d == 0b1) regTable[w][reg] else regTable[w][rm];
                         const srcReg = if (d == 0b1) regTable[w][rm] else regTable[w][reg];
-                        try src.writer().print("mov {s}, {s}", .{ destReg, srcReg });
+                        try src.writer().print("mov {s}, {s}\n", .{ destReg, srcReg });
                     },
                     else => std.debug.print("Unhandled mode!\n", .{}),
                 }
@@ -108,7 +108,6 @@ fn parse(self: *Self, filename: []const u8, file: File) ![]u8 {
                 std.debug.print("Unknown instruction!\n", .{});
             },
         }
-        try src.appendSlice("\n");
     }
 
     self.src = try src.toOwnedSlice();
