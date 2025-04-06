@@ -126,3 +126,15 @@ test "listing_0037_single_register_mov" {
     const src = try dasm.disassemble("src/listings/listing_0037_single_register_mov") orelse "";
     try std.testing.expectEqualStrings(expected, src);
 }
+
+test "listing_0038_many_register_mov" {
+    const expected = @embedFile("listings/listing_0038_many_register_mov-expected.asm");
+
+    const allocator = std.testing.allocator;
+    var dasm = Self.init(allocator);
+    defer dasm.deinit();
+
+    // Disassemble the binary
+    const src = try dasm.disassemble("src/listings/listing_0038_many_register_mov") orelse "";
+    try std.testing.expectEqualStrings(expected, src);
+}
