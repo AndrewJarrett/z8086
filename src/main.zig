@@ -1,6 +1,8 @@
 const std = @import("std");
 const ArgIterator = std.process.ArgIterator;
 
+const Disassembler = @import("Disassembler.zig");
+
 const Args = enum {
     d,
     disassemble,
@@ -8,6 +10,7 @@ const Args = enum {
     assemble,
     h,
     help,
+    unknown,
 };
 
 pub fn main() !void {
@@ -21,7 +24,7 @@ pub fn main() !void {
         \\Please specify one of the following commands:
         \\  -d [input], --disassemble [input]       Disassembles the given binary file into 8086 assembly code
         \\  -a [input], --assemble [input]          Assembles a given 8086 assembler file into a binary file according to the 8086 specification
-        \\  -h, --help                              This help text
+        \\  -h, --help                              Display this help text
         \\
     ;
 
@@ -42,16 +45,39 @@ pub fn main() !void {
         const size = std.mem.replace(u8, arg, "-", "", output[0..]);
         const argNoHyphens = output[0 .. arg.len - size];
 
-        switch (std.meta.stringToEnum(Args, argNoHyphens) orelse break) {
+        switch (std.meta.stringToEnum(Args, argNoHyphens) orelse Args.unknown) {
             .d, .disassemble => {
-                try writer.print("Disassemble what?\n", .{});
-                isError = false;
+                if (iter.next()) |input| {
+                    try writer.print("Disassembling {s}...\n\n", .{input});
+                    try bw.flush();
+
+                    var dasm = Disassembler.init(allocator);
+                    defer dasm.deinit();
+
+                    const src = try dasm.disassemble(input);
+                    if (src) |s| {
+                        try writer.print("{s}\n", .{s});
+                        isError = false;
+                    } else {
+                        isError = true;
+                    }
+                } else {
+                    try writer.print("Disassemble what?\n", .{});
+                }
             },
             .a, .assemble => {
-                try writer.print("Assemble what?\n", .{});
-                isError = false;
+                if (iter.next()) |input| {
+                    try writer.print("Assemble {s}\n", .{input});
+                    isError = false;
+                } else {
+                    try writer.print("Assemble what?\n", .{});
+                }
             },
-            else => break,
+            .h, .help => break,
+            .unknown => {
+                try writer.print("Unknown argument.\n", .{});
+                break;
+            },
         }
     }
 
@@ -59,12 +85,4 @@ pub fn main() !void {
     if (isError) try writer.print(helpText, .{});
 
     try bw.flush();
-}
-
-test "listing_0037_single_register_mov" {
-    const bin = @embedFile("listing/listing_0037_single_register_mov");
-    const expected = @embedFile("listing/listing_0037_single_register_mov-expected.asm");
-
-    const src = bin; // Disassemble the binary
-    try std.testing.expectEqualStrings(src, expected);
 }
