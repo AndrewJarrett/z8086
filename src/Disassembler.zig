@@ -10,6 +10,7 @@ const OpenError = fs.File.OpenError;
 const Self = @This();
 
 allocator: Allocator,
+src: []u8 = undefined,
 file: ?File = undefined,
 
 const regTable = [2][8][]const u8{
@@ -27,10 +28,10 @@ pub fn init(allocator: Allocator) Self {
 }
 
 pub fn deinit(self: *Self) void {
-    _ = self;
+    self.allocator.free(self.src);
 }
 
-pub fn disassemble(self: Self, filename: []const u8) !?[]u8 {
+pub fn disassemble(self: *Self, filename: []const u8) !?[]u8 {
     if (try self.open(filename)) |file| {
         defer file.close();
         return self.parse(filename, file) catch |err| {
@@ -62,7 +63,7 @@ fn open(self: Self, file: []const u8) !?File {
     };
 }
 
-fn parse(self: Self, filename: []const u8, file: File) ![]u8 {
+fn parse(self: *Self, filename: []const u8, file: File) ![]u8 {
     var src = ArrayList(u8).init(self.allocator);
     try src.appendSlice("; ");
     try src.appendSlice(filename);
@@ -73,7 +74,8 @@ fn parse(self: Self, filename: []const u8, file: File) ![]u8 {
 
     var bits: u16 = undefined;
     var opcode = try reader.readBits(u6, 6, &bits);
-    std.debug.print("opcode: {b}, bits: {d}\n", .{ opcode, bits });
+    std.log.debug("opcode: {b}, bits: {d}\n", .{ opcode, bits });
+
     while (bits > 0) : (opcode = try reader.readBits(u6, 6, &bits)) {
         switch (opcode) {
             // MOV
@@ -83,7 +85,7 @@ fn parse(self: Self, filename: []const u8, file: File) ![]u8 {
                 const mod = try reader.readBits(u2, 2, &bits);
                 const reg = try reader.readBits(u3, 3, &bits);
                 const rm = try reader.readBits(u3, 3, &bits);
-                std.debug.print("opcode (mov): {b}, d: {b}, w: {b}, mod: {b}, reg: {b}, rm: {b}\n", .{
+                std.log.debug("opcode (mov): {b}, d: {b}, w: {b}, mod: {b}, reg: {b}, rm: {b}\n", .{
                     opcode,
                     d,
                     w,
@@ -109,7 +111,8 @@ fn parse(self: Self, filename: []const u8, file: File) ![]u8 {
         try src.appendSlice("\n");
     }
 
-    return src.toOwnedSlice();
+    self.src = try src.toOwnedSlice();
+    return self.src;
 }
 
 test "listing_0037_single_register_mov" {
