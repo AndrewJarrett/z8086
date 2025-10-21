@@ -20,6 +20,8 @@ const regTable = [2][8][]const u8{
     [8][]const u8{ "ax", "cx", "dx", "bx", "sp", "bp", "si", "di" },
 };
 
+const effAddrCalc = [8][]const u8{ "bx + si", "bx + di", "bp + si", "bp + di", "si", "di", "bp", "bx" };
+
 pub fn init(allocator: Allocator) Self {
     return .{
         .allocator = allocator,
@@ -73,40 +75,150 @@ fn parse(self: *Self, filename: []const u8, file: File) ![]u8 {
     var reader = std.io.bitReader(.big, br.reader());
 
     var bits: u16 = undefined;
-    var opcode = try reader.readBits(u6, 6, &bits);
+    var opcode = try reader.readBits(u8, 3, &bits);
     std.log.debug("opcode: {b}, bits: {d}", .{ opcode, bits });
 
-    while (bits > 0) : (opcode = try reader.readBits(u6, 6, &bits)) {
-        switch (opcode) {
-            // MOV
-            0b100010 => {
-                const d = try reader.readBits(u1, 1, &bits);
-                const w = try reader.readBits(u1, 1, &bits);
-                const mod = try reader.readBits(u2, 2, &bits);
-                const reg = try reader.readBits(u3, 3, &bits);
-                const rm = try reader.readBits(u3, 3, &bits);
-                std.log.debug("opcode (mov): {b}, d: {b}, w: {b}, mod: {b}, reg: {b}, rm: {b}", .{
-                    opcode,
-                    d,
-                    w,
-                    mod,
-                    reg,
-                    rm,
-                });
+    // Start with first 3 bits of opcode
+    while (bits > 0) : (opcode = try reader.readBits(u8, 3, &bits)) {
+        var i: u3 = 0;
+        // Check until the end of the byte until we match an opcode
+        while (i <= 5) : (i += 1) {
+            std.debug.print("\ni: {d}, opcode: {b}", .{ i, opcode });
+            switch (i) {
+                0 => {},
+                1 => {
+                    switch (opcode) {
+                        // mov - immediate to register
+                        0b1011 => {
+                            const w = try reader.readBits(u1, 1, &bits);
+                            const reg = try reader.readBits(u3, 3, &bits);
+                            const data = data: {
+                                const lowByte = try reader.readBits(u8, 8, &bits);
+                                const highByte = if (w == 0) 0 else try reader.readBits(u8, 8, &bits);
+                                break :data @shlExact(@as(u16, highByte), 8) | lowByte;
+                            };
+                            std.debug.print("opcode (mov): {b}, w: {b}, reg: {b:0>3}, data: {b:0>16} / {d}", .{
+                                opcode,
+                                w,
+                                reg,
+                                data,
+                                data,
+                            });
+                            const destReg = regTable[w][reg];
+                            try src.writer().print("mov {s}, {d}\n", .{ destReg, data });
+                            break;
+                        },
+                        else => {},
+                    }
+                },
+                2 => {},
+                3 => {
+                    //std.debug.print("Testing i = 3; opcode: {b}; opcode == 0b100010?: {}", .{ opcode, (opcode == 0b100010) });
+                    switch (opcode) {
+                        0b100010 => {
+                            const d = try reader.readBits(u1, 1, &bits);
+                            const w = try reader.readBits(u1, 1, &bits);
+                            const mod = try reader.readBits(u2, 2, &bits);
+                            const reg = try reader.readBits(u3, 3, &bits);
+                            const rm = try reader.readBits(u3, 3, &bits);
+                            std.debug.print("opcode (mov): {b}, d: {b}, w: {b}, mod: {b:0>2}, reg: {b:0>3}, rm: {b:0>3}", .{
+                                opcode,
+                                d,
+                                w,
+                                mod,
+                                reg,
+                                rm,
+                            });
 
-                switch (mod) {
-                    0b11 => {
-                        // Register to register mov
-                        const destReg = if (d == 0b1) regTable[w][reg] else regTable[w][rm];
-                        const srcReg = if (d == 0b1) regTable[w][rm] else regTable[w][reg];
-                        try src.writer().print("mov {s}, {s}\n", .{ destReg, srcReg });
-                    },
-                    else => std.debug.print("Unhandled mode!\n", .{}),
-                }
-            },
-            else => {
+                            switch (mod) {
+                                0b00 => {
+                                    // Memory mode, no displacement
+                                    const destOrSource = regTable[w][reg];
+
+                                    if (rm == 0b110) {
+                                        // For rm = 110, then load direct address
+                                        const lowByte = try reader.readBits(u8, 8, &bits);
+                                        const highByte = try reader.readBits(u8, 8, &bits);
+                                        const direct = (@shlExact(@as(u16, highByte), 8)) | lowByte;
+                                        if (d == 0b1) {
+                                            try src.writer().print("mov {s}, {d}\n", .{ destOrSource, direct });
+
+                                        } else {
+                                            try src.writer().print("mov {d}, {s}\n", .{ direct, destOrSource });
+                                        }
+                                    } else {
+                                        const effecAddrCalc = effAddrCalc[rm];
+
+                                        if (d == 0b1) {
+
+                                            try src.writer().print("mov {s}, [{s}]\n", .{ destOrSource, effecAddrCalc });
+                                        } else {
+                                            try src.writer().print("mov [{s}], {s}\n", .{ effecAddrCalc, destOrSource });
+                                        }
+                                    }
+
+                                },
+                                0b01 => {
+                                    // Memory mode, 8 bit displacement
+                                    const destOrSource = regTable[w][reg];
+                                    const effecAddrCalc = effAddrCalc[rm];
+                                    const disp = try reader.readBits(u8, 8, &bits);
+                                    if (disp > 0) {
+                                        if (d == 0b1) {
+                                            try src.writer().print("mov {s}, [{s} + {d}]\n", .{ destOrSource, effecAddrCalc, disp });
+                                        } else {
+                                            try src.writer().print("mov [{s} + {d}], {s}\n", .{ effecAddrCalc, disp, destOrSource });
+                                        }
+                                    } else {
+                                        if (d == 0b1) {
+                                            try src.writer().print("mov {s}, [{s}]\n", .{ destOrSource, effecAddrCalc });
+                                        } else {
+                                            try src.writer().print("mov [{s}], {s}\n", .{ effecAddrCalc, destOrSource });
+                                        }
+                                    }
+                                },
+                                0b10 => {
+                                    // Memory mode, 16-bit / word displacement
+                                    const destOrSource = regTable[w][reg];
+                                    const effecAddrCalc = effAddrCalc[rm];
+                                    const disp = word: {
+                                        const lowByte = try reader.readBits(u8, 8, &bits);
+                                        const highByte = try reader.readBits(u8, 8, &bits);
+                                        break :word @shlExact(@as(u16, highByte), 8) | lowByte;
+                                    };
+
+                                    if (d == 0b1) {
+                                        try src.writer().print("mov {s}, [{s} + {d}]\n", .{ destOrSource, effecAddrCalc, disp });
+                                    } else {
+                                        try src.writer().print("mov [{s} + {d}], {s}\n", .{ effecAddrCalc, disp, destOrSource });
+                                    }
+                                },
+                                0b11 => {
+                                    // Register to register mov
+                                    const destOrSource = if (d == 0b1) regTable[w][reg] else regTable[w][rm];
+                                    const srcReg = if (d == 0b1) regTable[w][rm] else regTable[w][reg];
+                                    try src.writer().print("mov {s}, {s}\n", .{ destOrSource, srcReg });
+                                },
+                            }
+                            break;
+                        },
+                        else => {},
+                    }
+                },
+                4 => {},
+                5 => {},
+                else => {
+                    @panic("Should not have iterated past 8 bits");
+                },
+            }
+
+            if (i >= 5) {
                 std.debug.print("Unknown instruction!\n", .{});
-            },
+                break;
+            } else {
+                // Update opcode
+                opcode = (opcode << 1) + (try reader.readBits(u1, 1, &bits));
+            }
         }
     }
 
