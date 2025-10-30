@@ -92,10 +92,22 @@ fn parse(self: *Self, filename: []const u8, file: File) ![]u8 {
                         0b1011 => {
                             const w = try reader.readBits(u1, 1, &bits);
                             const reg = try reader.readBits(u3, 3, &bits);
-                            const data = data: {
-                                const lowByte = try reader.readBits(u8, 8, &bits);
-                                const highByte = if (w == 0) 0 else try reader.readBits(u8, 8, &bits);
-                                break :data @shlExact(@as(u16, highByte), 8) | lowByte;
+                            const data: i16 = data: {
+                                const lowByte = try reader.readBits(i8, 8, &bits);
+                                if (w == 0) {
+                                    if (lowByte >= 0) {
+                                        break :data lowByte;
+                                    } else {
+                                        // Do sign extension
+                                        const lowByteUnsigned: u16 = @as(u8, @bitCast(lowByte));
+                                        const highByte: u16 = 0xFF00;
+                                        break :data @bitCast(highByte | lowByteUnsigned);
+                                    }
+                                } else {
+                                    const lowByteUnsigned: u16 = @as(u8, @bitCast(lowByte));
+                                    const highByte = try reader.readBits(u16, 8, &bits);
+                                    break :data @bitCast(@shlExact(highByte, 8) | lowByteUnsigned);
+                                }
                             };
                             std.debug.print("opcode (mov): {b}, w: {b}, reg: {b:0>3}, data: {b:0>16} / {d}", .{
                                 opcode,
@@ -137,11 +149,13 @@ fn parse(self: *Self, filename: []const u8, file: File) ![]u8 {
 
                                     if (rm == 0b110) {
                                         // For rm = 110, then load direct address
-                                        const lowByte = try reader.readBits(u8, 8, &bits);
-                                        const highByte = try reader.readBits(u8, 8, &bits);
-                                        const direct = (@shlExact(@as(u16, highByte), 8)) | lowByte;
+                                        const direct: i16 = data: {
+                                            const lowByte = try reader.readBits(u16, 8, &bits);
+                                            const highByte = try reader.readBits(u16, 8, &bits);
+                                            break :data @bitCast(@shlExact(highByte, 8) | lowByte);
+                                        };
                                         if (d == 0b1) {
-                                            try src.writer().print("mov {s}, {d}\n", .{ destOrSource, direct });
+                                            try src.writer().print("mov {s}, [{d}]\n", .{ destOrSource, direct });
 
                                         } else {
                                             try src.writer().print("mov {d}, {s}\n", .{ direct, destOrSource });
@@ -162,12 +176,13 @@ fn parse(self: *Self, filename: []const u8, file: File) ![]u8 {
                                     // Memory mode, 8 bit displacement
                                     const destOrSource = regTable[w][reg];
                                     const effecAddrCalc = effAddrCalc[rm];
-                                    const disp = try reader.readBits(u8, 8, &bits);
-                                    if (disp > 0) {
+                                    const disp = try reader.readBits(i8, 8, &bits);
+                                    const sign = if (disp > 0) "+" else "-";
+                                    if (disp != 0) {
                                         if (d == 0b1) {
-                                            try src.writer().print("mov {s}, [{s} + {d}]\n", .{ destOrSource, effecAddrCalc, disp });
+                                            try src.writer().print("mov {s}, [{s} {s} {d}]\n", .{ destOrSource, effecAddrCalc, sign, @abs(disp) });
                                         } else {
-                                            try src.writer().print("mov [{s} + {d}], {s}\n", .{ effecAddrCalc, disp, destOrSource });
+                                            try src.writer().print("mov [{s} {s} {d}], {s}\n", .{ effecAddrCalc, sign, @abs(disp), destOrSource });
                                         }
                                     } else {
                                         if (d == 0b1) {
@@ -181,16 +196,17 @@ fn parse(self: *Self, filename: []const u8, file: File) ![]u8 {
                                     // Memory mode, 16-bit / word displacement
                                     const destOrSource = regTable[w][reg];
                                     const effecAddrCalc = effAddrCalc[rm];
-                                    const disp = word: {
-                                        const lowByte = try reader.readBits(u8, 8, &bits);
-                                        const highByte = try reader.readBits(u8, 8, &bits);
-                                        break :word @shlExact(@as(u16, highByte), 8) | lowByte;
+                                    const disp: i16 = word: {
+                                        const lowByte = try reader.readBits(u16, 8, &bits);
+                                        const highByte = try reader.readBits(u16, 8, &bits);
+                                        break :word @bitCast(@shlExact(highByte, 8) | lowByte);
                                     };
+                                    const sign = if (disp > 0) "+" else "-";
 
                                     if (d == 0b1) {
-                                        try src.writer().print("mov {s}, [{s} + {d}]\n", .{ destOrSource, effecAddrCalc, disp });
+                                        try src.writer().print("mov {s}, [{s} {s} {d}]\n", .{ destOrSource, effecAddrCalc, sign, @abs(disp) });
                                     } else {
-                                        try src.writer().print("mov [{s} + {d}], {s}\n", .{ effecAddrCalc, disp, destOrSource });
+                                        try src.writer().print("mov [{s} {s} {d}], {s}\n", .{ effecAddrCalc, sign, @abs(disp), destOrSource });
                                     }
                                 },
                                 0b11 => {
@@ -205,7 +221,141 @@ fn parse(self: *Self, filename: []const u8, file: File) ![]u8 {
                         else => {},
                     }
                 },
-                4 => {},
+                4 => {
+                    switch(opcode) {
+                        0b1010000 => {
+                            // mov - memory to accumulator
+                            const w = try reader.readBits(u1, 1, &bits);
+                            const data: i16 = data: {
+                                const lowByte = try reader.readBits(i8, 8, &bits);
+                                if (w == 0) {
+                                    if (lowByte >= 0) {
+                                        break :data lowByte;
+                                    } else {
+                                        // Do sign extension
+                                        const lowByteUnsigned: u16 = @as(u8, @bitCast(lowByte));
+                                        const highByte: u16 = 0xFF00;
+                                        break :data @bitCast(highByte | lowByteUnsigned);
+                                    }
+                                } else {
+                                    const lowByteUnsigned: u16 = @as(u8, @bitCast(lowByte));
+                                    const highByte = try reader.readBits(u16, 8, &bits);
+                                    break :data @bitCast(@shlExact(highByte, 8) | lowByteUnsigned);
+                                }
+                            };
+                            std.debug.print("opcode (mov): {b}, w: {b}, data: {d}", .{
+                                opcode, w, data
+                            });
+                            try src.writer().print("mov ax, [{d}]\n", .{ data });
+                            break;
+                        },
+                        0b1010001 => {
+                            // mov - accumulator to memory
+                            const w = try reader.readBits(u1, 1, &bits);
+                            const data: i16 = data: {
+                                const lowByte = try reader.readBits(i8, 8, &bits);
+                                if (w == 0) {
+                                    if (lowByte >= 0) {
+                                        break :data lowByte;
+                                    } else {
+                                        // Do sign extension
+                                        const lowByteUnsigned: u16 = @as(u8, @bitCast(lowByte));
+                                        const highByte: u16 = 0xFF00;
+                                        break :data @bitCast(highByte | lowByteUnsigned);
+                                    }
+                                } else {
+                                    const lowByteUnsigned: u16 = @as(u8, @bitCast(lowByte));
+                                    const highByte = try reader.readBits(u16, 8, &bits);
+                                    break :data @bitCast(@shlExact(highByte, 8) | lowByteUnsigned);
+                                }
+                            };
+                            std.debug.print("opcode (mov): {b}, w: {b}, data: {d}", .{
+                                opcode, w, data
+                            });
+                            try src.writer().print("mov [{d}], ax\n", .{ data });
+                            break;
+                        },
+                        0b1100011 => {
+                            // mov - immediate to register/memory
+                            const w = try reader.readBits(u1, 1, &bits);
+                            const mod = try reader.readBits(u2, 2, &bits);
+                            _ = try reader.readBits(u3, 3, &bits);
+                            const rm = try reader.readBits(u3, 3, &bits);
+                            const effecAddrCalc = effAddrCalc[rm];
+                            const byteOrWord: []const u8 = if (w == 0) "byte" else "word";
+
+                            std.debug.print("opcode (mov): {b}, w: {b}, mod: {b:0>2}, rm: {b:0>3}, effecAddrCalc: {s}, byteOrWord: {s}\n", .{
+                                opcode, w, mod, rm, effecAddrCalc, byteOrWord,
+                            });
+
+                            switch (mod) {
+                                0b00 => {
+                                    // memory mode, no displacement
+                                    if (rm == 0b110) {
+                                        // For rm = 110, then load direct address
+                                        const direct: i16 = data: {
+                                            const lowByte = try reader.readBits(u16, 8, &bits);
+                                            const highByte = try reader.readBits(u16, 8, &bits);
+                                            break :data @bitCast(@shlExact(highByte, 8) | lowByte);
+                                        };
+                                        try src.writer().print("mov [{s}], [{d}]\n", .{ effecAddrCalc, direct });
+                                    } else {
+                                        const data: i16 = data: {
+                                            const lowByte = try reader.readBits(u16, 8, &bits);
+                                            const highByte = if (w == 0) 0 else try reader.readBits(u16, 8, &bits);
+                                            break :data @bitCast(@shlExact(highByte, 8) | lowByte);
+                                        };
+
+                                        try src.writer().print("mov [{s}], {s} {d}\n", .{ effecAddrCalc, byteOrWord, data  });
+                                    }
+                                },
+                                0b01 => {
+                                    // memory mode, 8-bit displacement
+                                    const disp: i16 = try reader.readBits(i8, 8, &bits);
+                                    const sign = if (disp > 0) "+" else "-";
+                                    const data: i16 = data: {
+                                        const lowByte = try reader.readBits(u16, 8, &bits);
+                                        const highByte = if (w == 0) 0 else try reader.readBits(u16, 8, &bits);
+                                        break :data @bitCast(@shlExact(highByte, 8) | lowByte);
+                                    };
+                                    try src.writer().print("mov [{s} {s} {d}], {s} {d}\n", .{
+                                        effecAddrCalc, sign, disp, byteOrWord, data
+                                    });
+                                },
+                                0b10 => {
+                                    // memory mode, 16-bit displacement
+                                    const disp: i16 = disp: {
+                                        const lowByte = try reader.readBits(u16, 8, &bits);
+                                        const highByte = try reader.readBits(u16, 8, &bits);
+                                        break :disp @bitCast(@shlExact(highByte, 8) | lowByte);
+                                    };
+                                    const sign = if (disp > 0) "+" else "-";
+                                    const data: i16 = data: {
+                                        const lowByte = try reader.readBits(u16, 8, &bits);
+                                        const highByte = if (w == 0) 0 else try reader.readBits(u16, 8, &bits);
+                                        break :data @bitCast(@shlExact(highByte, 8) | lowByte);
+                                    };
+                                    try src.writer().print("mov [{s} {s} {d}], {s} {d}\n", .{
+                                        effecAddrCalc, sign, disp, byteOrWord, data
+                                    });
+                                },
+                                0b11 => {
+                                    // Register mode, no displacement
+                                    const data: i16 = data: {
+                                        const lowByte = try reader.readBits(u16, 8, &bits);
+                                        const highByte = if (w == 0) 0 else try reader.readBits(u16, 8, &bits);
+                                        break :data @bitCast(@shlExact(highByte, 8) | lowByte);
+                                    };
+                                    try src.writer().print("mov [{s}], {s} {d}\n", .{
+                                        effecAddrCalc, byteOrWord, data
+                                    });
+                                }
+                            }
+                            break;
+                        },
+                        else => {},
+                    }
+                },
                 5 => {},
                 else => {
                     @panic("Should not have iterated past 8 bits");
@@ -259,5 +409,17 @@ test "listing_0039_more_movs" {
 
     // Disassemble the binary
     const src = try dasm.disassemble("src/listings/listing_0039_more_movs") orelse "";
+    try std.testing.expectEqualStrings(expected, src);
+}
+
+test "listing_0040_more_movs" {
+    const expected = @embedFile("listings/listing_0040_challenge_movs-expected.asm");
+
+    const allocator = std.testing.allocator;
+    var dasm = Self.init(allocator);
+    defer dasm.deinit();
+
+    // Disassemble the binary
+    const src = try dasm.disassemble("src/listings/listing_0040_challenge_movs") orelse "";
     try std.testing.expectEqualStrings(expected, src);
 }
